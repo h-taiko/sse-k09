@@ -196,3 +196,5 @@ SSEが分割されると readline() 方式が壊れることがある
 対策：
 
 llm_client.py を バッファ処理（\\n\\n区切り）版にする
+
+<img width="1295" height="970" alt="image" src="https://github.com/user-attachments/assets/0d1de733-cc83-489a-a566-e83234581e09" />
