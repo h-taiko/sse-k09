@@ -17,16 +17,27 @@ def read_ch(ch):
     value = ((r[1] & 3) << 8) | r[2]
     return value
 
-print("MCP3008 test: CH0 を読みます（Ctrl+Cで終了）")
-print("つまみを回して数値が変われば成功です\n")
+print("MCP3008 test: CH0 / CH1 を読みます（Ctrl+Cで終了）")
+print("同じ可変抵抗を CH0 と CH1 に接続してください\n")
 
 try:
     while True:
-        v = read_ch(0)   # CH0
-        temp01 = v / 1023.0
-        print(f"raw={v:4d}  temp01={temp01:.3f}", end="\r")
+        v0 = read_ch(0)  # CH0
+        v1 = read_ch(1)  # CH1
+
+        n0 = v0 / 1023.0
+        n1 = v1 / 1023.0
+
+        print(
+            f"CH0 raw={v0:4d} norm={n0:.3f} | "
+            f"CH1 raw={v1:4d} norm={n1:.3f}",
+            end="\r"
+        )
+
         time.sleep(0.1)
+
 except KeyboardInterrupt:
     print("\n終了")
+
 finally:
     spi.close()
