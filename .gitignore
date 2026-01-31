@@ -1,0 +1,4 @@
+*.log
+llm_requests.log
+proxy/llm_requests.log
+proxy/llm_requests.log
