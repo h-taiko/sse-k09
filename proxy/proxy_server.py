@@ -9,9 +9,16 @@ PROXY_PORT = 18080
 LLAMA_BASE = "http://127.0.0.1:8080"
 LOG_PATH = "llm_requests.log"
 
+# スクリプトパスを取得
+script_path = os.path.dirname(os.path.abspath(__file__))
+# ログファイルのパスを設定（自身のパスからlogsフォルダに）
+log_path = os.path.join(script_path, '..', 'logs', 'llm_requests.log')
+
+
+
 def log_request(data: dict):
     rec = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "path": "/v1/chat/completions", "body": data}
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
+    with open(log_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 def print_input_only(data: dict):
