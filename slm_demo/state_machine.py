@@ -75,7 +75,7 @@ class ToiletFeedbackEngine:
     def set_topk01(self, topk01: float):
         self.session.topk01 = clamp(topk01, 0.0, 1.0)
 
-    # ✅ 2ノブをまとめて更新（run_gpio からはこれを呼ぶ）
+    # 2ノブをまとめて更新（run_gpio からはこれを呼ぶ）
     def set_knobs(self, temp01: float, topk01: float):
         self.session.temp01 = clamp(temp01, 0.0, 1.0)
         self.session.topk01 = clamp(topk01, 0.0, 1.0)
