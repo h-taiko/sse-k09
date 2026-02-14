@@ -35,7 +35,7 @@ def chat_completion(
 ) -> str:
     """
     OpenAI互換 /v1/chat/completions へPOST。
-    stream=True の場合は SSE(data: ...) を行単位(readline)で処理する。
+    stream=True の場合は SSE(data: ...) を chunk読みしてイベント単位で処理する。
     """
     payload = {
         "model": "local",
@@ -52,9 +52,49 @@ def chat_completion(
     req = urllib.request.Request(
         LLAMA_URL,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        },
         method="POST",
     )
+
+    def _iter_sse_payload_strings(resp):
+        """
+        SSEを raw bytes から復元して、イベントごとの payload(data: の結合結果) をyieldする
+        """
+        buf = b""
+        data_lines = []
+
+        while True:
+            chunk = resp.read(8192)
+            if not chunk:
+                break
+            buf += chunk
+
+            while b"\n" in buf:
+                raw_line, buf = buf.split(b"\n", 1)
+                if raw_line.endswith(b"\r"):
+                    raw_line = raw_line[:-1]
+                line = raw_line.decode("utf-8", errors="replace")
+
+                # 空行 = event 終端
+                if line == "":
+                    if data_lines:
+                        yield "\n".join(data_lines).strip()
+                        data_lines = []
+                    continue
+
+                if line.startswith(":"):
+                    continue
+                if line.startswith("data:"):
+                    data_lines.append(line[len("data:"):].lstrip())
+                    continue
+                # event: / id: は無視
+
+        # EOFで残っていたらflush
+        if data_lines:
+            yield "\n".join(data_lines).strip()
 
     try:
         with urllib.request.urlopen(req, timeout=600) as resp:
@@ -64,25 +104,16 @@ def chat_completion(
                 return obj["choices"][0]["message"]["content"].strip()
 
             full = []
-            while True:
-                raw = resp.readline()
-                if not raw:
-                    break
-
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line:
+            for payload_str in _iter_sse_payload_strings(resp):
+                if not payload_str:
                     continue
-                if not line.startswith("data:"):
-                    continue
-
-                payload_str = line[len("data:"):].strip()
-
                 if payload_str == "[DONE]":
                     break
 
                 try:
                     obj = json.loads(payload_str)
                 except Exception:
+                    # proxy がエラーメッセージを文字列で流した等に備える
                     continue
 
                 delta = _extract_stream_delta(obj)

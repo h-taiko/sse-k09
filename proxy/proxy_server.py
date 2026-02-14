@@ -67,27 +67,62 @@ def openai_messages_to_gemini(messages: List[Dict[str, Any]]) -> Tuple[Optional[
 
     if not contents:
         contents = [{"role": "user", "parts": [{"text": "Hello"}]}]
-
+    
+    system_instruction = None
+    if system_texts:
+        system_instruction = {
+            "role": "user",
+            "parts": [{"text": "\n\n".join(system_texts)}],
+        }
     return system_instruction, contents
 
 
 def openai_params_to_gemini_generation_config(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    OpenAI互換パラメータ → Gemini generationConfig 変換。
+    重要: max_tokens が小さすぎると finishReason=MAX_TOKENS で即打ち切られる。
+    """
     cfg: Dict[str, Any] = {}
-    if data.get("temperature") is not None:
+
+    # temperature/top_p はそのまま寄せる
+    if "temperature" in data and data["temperature"] is not None:
         cfg["temperature"] = float(data["temperature"])
-    if data.get("top_p") is not None:
+    if "top_p" in data and data["top_p"] is not None:
         cfg["topP"] = float(data["top_p"])
-    if data.get("top_k") is not None:
+
+    # max_tokens → maxOutputTokens
+    # OpenAI互換では未指定の場合があり得る。その場合はデフォルトを十分大きくする。
+    mt = data.get("max_tokens", None)
+
+    # run_terminal等が 0 / 極小 を入れてくるケースも防御
+    if mt is None:
+        max_out = 512
+    else:
         try:
-            cfg["topK"] = int(data["top_k"])
+            max_out = int(mt)
         except Exception:
-            pass
-    if data.get("max_tokens") is not None:
-        try:
-            cfg["maxOutputTokens"] = int(data["max_tokens"])
-        except Exception:
-            pass
+            max_out = 512
+
+    # あまりに小さい値は実用にならないので底上げ（必要なら下げてOK）
+    if max_out < 64:
+        max_out = 2048
+
+    # 念のため過大値をクリップ（モデル上限はモデルによる）
+    if max_out > 8192:
+        max_out = 8192
+
+    cfg["maxOutputTokens"] = max_out
+
+    # あるなら stop を変換（OpenAIの stop は文字列 or 配列）
+    stop = data.get("stop")
+    if stop:
+        if isinstance(stop, str):
+            cfg["stopSequences"] = [stop]
+        elif isinstance(stop, list):
+            cfg["stopSequences"] = [s for s in stop if isinstance(s, str)]
+
     return cfg
+
 
 
 # -----------------------------
@@ -155,26 +190,47 @@ async def gemini_stream_generate_content(
     model: str,
     timeout_s: int = 120,
 ) -> Tuple[ClientSession, aiohttp.ClientResponse]:
-    # alt=sse が必須
-    url = f"{GEMINI_BASE}/models/{model}:streamGenerateContent?alt=sse"
+
+    url = f"{GEMINI_BASE}/models/{model}:streamGenerateContent"
+
     system_instruction, contents = openai_messages_to_gemini(data.get("messages", []))
     gen_cfg = openai_params_to_gemini_generation_config(data)
 
-    req: Dict[str, Any] = {"contents": contents}
+    req: Dict[str, Any] = {
+        "contents": contents,
+    }
+
     if system_instruction is not None:
-        req["system_instruction"] = system_instruction
+        req["systemInstruction"] = system_instruction
+
     if gen_cfg:
         req["generationConfig"] = gen_cfg
 
     headers = {
-        "x-goog-api-key": api_key,
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
+        # ★ API Key を Header に載せる（Queryでは出さない）
+        "x-goog-api-key": api_key,
     }
 
-    session = ClientSession(timeout=aiohttp.ClientTimeout(total=timeout_s))
-    resp = await session.post(url, headers=headers, json=req)
+    timeout = aiohttp.ClientTimeout(
+        total=None,
+        sock_connect=30,
+        sock_read=None,  # SSEなので無制限寄り
+    )
+
+    session = ClientSession(timeout=timeout)
+
+    resp = await session.post(
+        url,
+        headers=headers,
+        params={"alt": "sse"},  # ← key は入れない
+        json=req,
+    )
+
     return session, resp
+
+
 
 
 def _extract_text_from_gemini_event(ev: Dict[str, Any]) -> str:
@@ -200,10 +256,6 @@ async def proxy_gemini_stream_as_openai_sse(
     api_key: str,
     model: str,
 ) -> web.StreamResponse:
-    """
-    Gemini SSE(streamGenerateContent?alt=sse) を OpenAI互換SSEへ変換。
-    取りこぼし防止のため、chunk分割ではなく「行ベース」でSSEを処理する。
-    """
     proxy_resp = web.StreamResponse(
         status=200,
         headers={
@@ -214,82 +266,28 @@ async def proxy_gemini_stream_as_openai_sse(
     )
     await proxy_resp.prepare(request)
 
-    async def _open_upstream():
-        return await gemini_stream_generate_content(data=data, api_key=api_key, model=model)
-
-    # 429対応：retryDelayに従って最大2回待って再試行
-    max_retries = 2
-    attempt = 0
-    session: Optional[aiohttp.ClientSession] = None
+    created = int(time.time())
+    session: Optional[ClientSession] = None
     resp: Optional[aiohttp.ClientResponse] = None
 
-    while True:
-        attempt += 1
-        session, resp = await _open_upstream()
-        ct = resp.headers.get("Content-Type")
-        print(f"[proxy] gemini upstream status={resp.status} ct={ct} attempt={attempt}", flush=True)
-
-        if resp.status != 429:
-            break
-
-        body = await resp.text()
-        wait_s = 60.0
-        try:
-            obj = json.loads(body)
-            # details の retryDelay を拾う（"46s" など）
-            details = (obj.get("error") or {}).get("details") or []
-            for d in details:
-                if isinstance(d, dict) and "retryDelay" in d:
-                    rd = d["retryDelay"]
-                    if isinstance(rd, str) and rd.endswith("s"):
-                        wait_s = float(rd[:-1])
-                        break
-        except Exception:
-            pass
-
-        # close before waiting
-        try:
-            resp.release()
-        finally:
-            await session.close()
-
-        await proxy_resp.write(
-            make_openai_stream_chunk(
-                model=model,
-                content_delta=f"[proxy] upstream 429 rate limited. retry in {wait_s:.1f}s (attempt {attempt}/{max_retries+1})",
-            )
-        )
-        await asyncio.sleep(wait_s)
-
-        if attempt >= (max_retries + 1):
-            # give up after retries
-            await proxy_resp.write(
-                make_openai_stream_chunk(model=model, content_delta=f"[proxy] giving up after {attempt} attempts.")
-            )
-            await proxy_resp.write(make_openai_stream_done())
-            await proxy_resp.write_eof()
-            return proxy_resp
-
     try:
-        assert resp is not None and session is not None
+        session, resp = await gemini_stream_generate_content(data=data, api_key=api_key, model=model)
 
         if resp.status >= 400:
             err_text = await resp.text()
             await proxy_resp.write(
                 make_openai_stream_chunk(
                     model=model,
-                    content_delta=f"[proxy upstream error {resp.status}] {err_text}",
+                    content_delta=f"[upstream error {resp.status}]",
+                    created=created,
                 )
             )
             await proxy_resp.write(make_openai_stream_done())
             await proxy_resp.write_eof()
             return proxy_resp
 
-        created = int(time.time())
         last_text = ""
-
-        # SSEを仕様通り「行単位」で読む
-        # 1イベントは空行で区切られ、data: 行が複数ある場合は結合する
+        buf = b""
         data_lines: List[str] = []
 
         async def _flush_event():
@@ -304,63 +302,72 @@ async def proxy_gemini_stream_as_openai_sse(
             if not payload_str:
                 return
             if payload_str == "[DONE]":
-                # Geminiは普通送らないが防御
                 raise StopAsyncIteration
 
             try:
                 ev = json.loads(payload_str)
             except Exception:
-                # JSONでなければ捨てる
                 return
 
-            cur_text = _extract_text_from_gemini_event(ev)
-            if not cur_text:
-                return
+            # まずテキストを抽出して流す（←順番が重要）
+            cur_text = _extract_text_from_gemini_event(ev if isinstance(ev, dict) else {})
+            if cur_text:
+                if last_text and cur_text.startswith(last_text):
+                    delta = cur_text[len(last_text):]
+                    last_text = cur_text
+                else:
+                    delta = cur_text
+                    last_text = (last_text + cur_text) if last_text else cur_text
 
-            # Geminiが「累積」を返す場合と「増分」を返す場合があるので両対応
-            # - curが last をprefixに含む：差分= suffix
-            # - curが短い/無関係：増分扱いで全量
-            if last_text and cur_text.startswith(last_text):
-                delta = cur_text[len(last_text):]
-            else:
-                delta = cur_text
+                if delta:
+                    await proxy_resp.write(
+                        make_openai_stream_chunk(
+                            model=model,
+                            content_delta=delta,
+                            created=created,
+                        )
+                    )
+                    await asyncio.sleep(0)
 
-            # last_text 更新：累積ならcur、増分なら連結
-            if last_text and cur_text.startswith(last_text):
-                last_text = cur_text
-            else:
-                last_text = last_text + cur_text if last_text else cur_text
+            # その後で終了理由を見る（本文を捨てない）
+            cands = ev.get("candidates") if isinstance(ev, dict) else None
+            if isinstance(cands, list) and cands:
+                fr = (cands[0] or {}).get("finishReason")
+                # STOP以外（MAX_TOKENS等）は「終了」扱いで抜ける
+                if fr and fr != "STOP":
+                    raise StopAsyncIteration
 
-            if delta:
-                await proxy_resp.write(make_openai_stream_chunk(model=model, content_delta=delta, created=created))
-                await asyncio.sleep(0)
 
-        while True:
-            line_bytes = await resp.content.readline()
-            if not line_bytes:
-                # upstream closed
-                break
-
-            line = line_bytes.decode("utf-8", errors="ignore").rstrip("\r\n")
-
-            # 空行 = イベント終端
-            if line == "":
-                await _flush_event()
+        # SSE読取
+        async for chunk in resp.content.iter_chunked(8192):
+            if not chunk:
                 continue
+            buf += chunk
 
-            # コメント行は無視
-            if line.startswith(":"):
-                continue
+            while b"\n" in buf:
+                raw_line, buf = buf.split(b"\n", 1)
+                if raw_line.endswith(b"\r"):
+                    raw_line = raw_line[:-1]
+                line = raw_line.decode("utf-8", errors="ignore")
 
-            # data行を集める（複数行可）
+                if line == "":
+                    await _flush_event()
+                    continue
+
+                if line.startswith(":"):
+                    continue
+
+                if line.startswith("data:"):
+                    data_lines.append(line[len("data:"):].lstrip())
+                    continue
+
+        # EOF残り
+        if buf:
+            raw_line = buf[:-1] if buf.endswith(b"\r") else buf
+            line = raw_line.decode("utf-8", errors="ignore")
             if line.startswith("data:"):
                 data_lines.append(line[len("data:"):].lstrip())
-                continue
 
-            # event: / id: などは今は無視
-            continue
-
-        # 末尾に未flushがあれば処理
         await _flush_event()
 
         await proxy_resp.write(make_openai_stream_done())
@@ -375,7 +382,13 @@ async def proxy_gemini_stream_as_openai_sse(
             pass
         return proxy_resp
 
-    except (asyncio.CancelledError, ConnectionResetError, aiohttp.ClientConnectionError):
+    except Exception:
+        # 本番では詳細エラーは出さず静かに終了
+        try:
+            await proxy_resp.write(make_openai_stream_done())
+            await proxy_resp.write_eof()
+        except Exception:
+            pass
         return proxy_resp
 
     finally:

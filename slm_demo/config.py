@@ -6,7 +6,7 @@ HISTORY_TURNS = 2
 
 # 生成長は短めがUX良い
 MAX_TOKENS_STAGE1 = 60
-MAX_TOKENS_STAGE2 = 80
+MAX_TOKENS_STAGE2 = 200
 
 
 # 推論の安定（必要なら固定）

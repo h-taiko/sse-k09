@@ -184,9 +184,10 @@ class ToiletFeedbackEngine:
         self.session.phase = "done"
 
         params = self._params()
+
+        # ★ stage2 は prompts.py の build_stage2_user_prompt をそのまま効かせたいので
+        # ★ SYSTEM_PROMPT(3択強制) を入れない
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            # ※ prompts.py を直すまでは temp01 を渡してOK
             {"role": "user", "content": build_stage2_user_prompt(self.session.satisfaction or "2", ch, self.session.temp01)},
         ]
 
