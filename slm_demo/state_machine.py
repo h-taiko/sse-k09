@@ -36,17 +36,17 @@ def sampling_from_knobs(temp01: float, topk01: float) -> dict:
     t = clamp(temp01, 0.0, 1.0)
     k = clamp(topk01, 0.0, 1.0)
 
-    temperature = 0.1 + 1.1 * t         # 0.1 .. 1.2
-    top_k = int(20 + 80 * k)            # 20 .. 100
+    #temperature = 0.1 + 1.1 * t         # 0.1 .. 1.2
+    #top_k = int(20 + 80 * k)            # 20 .. 100
 
     # 補助（必要なら）
     top_p = 0.70 + 0.25 * t             # 0.70 .. 0.95
     repeat_penalty = 1.15 - 0.10 * t    # 1.15 .. 1.05
 
     return {
-        "temperature": temperature,
+        "temperature": t,
         "top_p": top_p,
-        "top_k": top_k,
+        "top_k": k,
         "repeat_penalty": repeat_penalty,
     }
 

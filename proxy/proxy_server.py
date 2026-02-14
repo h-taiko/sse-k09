@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import asyncio
 import aiohttp
@@ -13,8 +14,6 @@ LOG_PATH = "llm_requests.log"
 script_path = os.path.dirname(os.path.abspath(__file__))
 # ログファイルのパスを設定（自身のパスからlogsフォルダに）
 log_path = os.path.join(script_path, '..', 'logs', 'llm_requests.log')
-
-
 
 def log_request(data: dict):
     rec = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "path": "/v1/chat/completions", "body": data}

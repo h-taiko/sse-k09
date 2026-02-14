@@ -44,7 +44,7 @@ def read_choice_blocking(prompt="> ") -> str:
 def main():
     eng = ToiletFeedbackEngine()
 
-    # terminal側のノブ状態（GPIOの可変抵抗2chの代替）
+    # terminal側のノブ状態（GPIOの可変抵抗2chの代替。本当は物理側に存在するが、ないので）
     temp01 = 0.5
     topk01 = 0.5
 
