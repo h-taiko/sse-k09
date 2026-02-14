@@ -74,6 +74,7 @@ def main():
                         print("usage: /temp 0.73  (0..1)", flush=True); continue
                     try:
                         temp01 = clamp01(float(parts[1]))
+                        apply_knobs(eng, temp01, topk01, "temp")
                         print(f"[ok] temp01={temp01:.2f}", flush=True)
                     except:
                         print("usage: /temp 0.73  (0..1)", flush=True)
@@ -84,6 +85,7 @@ def main():
                         print("usage: /topk 0.40  (0..1)", flush=True); continue
                     try:
                         topk01 = clamp01(float(parts[1]))
+                        apply_knobs(eng, temp01, topk01, "topk")
                         print(f"[ok] topk01={topk01:.2f}", flush=True)
                     except:
                         print("usage: /topk 0.40  (0..1)", flush=True)

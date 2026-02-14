@@ -1,6 +1,7 @@
 # state_machine.py
 from dataclasses import dataclass
 from typing import Optional
+import random
 
 from config import MAX_TOKENS_STAGE1, MAX_TOKENS_STAGE2
 from prompts import (
@@ -11,6 +12,14 @@ from prompts import (
 )
 from llm_client import chat_completion
 
+
+FOCUS_LIST = [
+    "清潔さ",
+    "におい",
+    "設備",
+    "混雑",
+    "快適さ",
+]
 
 def clamp(x, lo, hi):
     return max(lo, min(hi, x))
@@ -46,7 +55,7 @@ def sampling_from_knobs(temp01: float, topk01: float) -> dict:
     return {
         "temperature": t,
         "top_p": top_p,
-        "top_k": k,
+        "top_k": int(20 + 80 * k),
         "repeat_penalty": repeat_penalty,
     }
 
@@ -98,11 +107,16 @@ class ToiletFeedbackEngine:
         self.session.reason = None
         self.session.phase = "await_sat"
 
+        #今回のセッションの論点を固定
+        focus = random.choice(FOCUS_LIST)
+        self.session.focus = focus
+
         params = self._params()
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             # ※ prompts.py を直すまでは temp01 を渡してOK
-            {"role": "user", "content": build_stage0_user_prompt(self.session.temp01)},
+            {"role": "user", "content": build_stage0_user_prompt(self.session.focus, self.session.temp01)},
+            # {"role": "user", "content": build_stage0_user_prompt(self.session.temp01)},
         ]
 
         print("LLM: ", end="", flush=True)
@@ -145,7 +159,9 @@ class ToiletFeedbackEngine:
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             # ※ prompts.py を直すまでは temp01 を渡してOK
-            {"role": "user", "content": build_stage1_user_prompt(ch, self.session.temp01)},
+            #{"role": "user", "content": build_stage1_user_prompt(ch, self.session.temp01)},
+            {"role": "user", "content": build_stage1_user_prompt(ch, self.session.last_question or "", self.session.temp01)},
+
         ]
 
         print("LLM: ", end="", flush=True)
