@@ -3,3 +3,5 @@
 llm_requests.log
 proxy/llm_requests.log
 proxy/llm_requests.log
+notebook/.ipynb_checkpoints
+script/jupyter_env
