@@ -35,7 +35,7 @@ def print_input_only(data: dict, backend: str):
     for i, m in enumerate(msgs):
         role = m.get("role")
         content = m.get("content", "")
-        head = content if len(content) <= 300 else content[:300] + " ...(truncated)"
+        head = content if len(content) <= 1000 else content[:1000] + " ...(truncated)"
         print(f"[{i}] {role}: {head}", flush=True)
     print("=== /LLM INPUT ===\n", flush=True)
 

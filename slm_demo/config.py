@@ -5,8 +5,8 @@ LLAMA_URL = "http://127.0.0.1:18080/v1/chat/completions"
 HISTORY_TURNS = 2
 
 # 生成長は短めがUX良い
-MAX_TOKENS_STAGE1 = 60
-MAX_TOKENS_STAGE2 = 200
+MAX_TOKENS_STAGE1 = 512
+MAX_TOKENS_STAGE2 = 512
 
 
 # 推論の安定（必要なら固定）
